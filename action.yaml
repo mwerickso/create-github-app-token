@@ -11,6 +11,14 @@ inputs:
     description: "GitHub App private key (PEM)."
     required: true
 
+  owner:
+    description: "The owner of the GitHub App installation. Defaults to the current repository owner."
+    default: ''
+
+  repositories:
+    description: "Comma-separated list of repositories to grant access to. Defaults to the current repository only."
+    default: ''
+
   current:
     description: "JSON from a previous invocation's result output. Contains token, expires-at, and app-slug. Pass to skip regeneration when still valid."
     default: ''
@@ -67,6 +75,8 @@ runs:
       with:
         app-id: ${{ inputs.app-id }}
         private-key: ${{ inputs.private-key }}
+        owner: ${{ inputs.owner }}
+        repositories: ${{ inputs.repositories }}
 
     - name: Get GitHub App User ID
       id: get-user-id
