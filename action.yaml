@@ -1,0 +1,109 @@
+name: Create GitHub App Token
+description: "Generate or refresh a GitHub App installation token. Reuses an existing token if it has >5 minutes of validity remaining."
+author: "mwerickso"
+
+inputs:
+  app-id:
+    description: "GitHub App ID."
+    required: true
+
+  private-key:
+    description: "GitHub App private key (PEM)."
+    required: true
+
+  current:
+    description: "JSON from a previous invocation's result output. Contains token, expires-at, and app-slug. Pass to skip regeneration when still valid."
+    default: ''
+
+outputs:
+  result:
+    description: "JSON map with token, expires-at, app-slug, and user-id."
+    value: ${{ steps.build-result.outputs.result }}
+
+  generated:
+    description: "Whether a new token was generated ('true') or an existing one was reused ('false')."
+    value: ${{ steps.build-result.outputs.generated }}
+
+branding:
+  icon: 'key'
+  color: 'blue'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check existing token
+      id: check-token
+      shell: bash
+      env:
+        CURRENT: ${{ inputs.current }}
+      run: |
+        set -euo pipefail
+
+        if [[ -n "$CURRENT" ]]; then
+          token=$(echo "$CURRENT" | jq -r '.token // empty')
+          expires_at=$(echo "$CURRENT" | jq -r '.["expires-at"] // empty')
+
+          if [[ -n "$token" && -n "$expires_at" ]]; then
+            now=$(date -u +%s)
+            expires=$(date -u -d "$expires_at" +%s 2>/dev/null || date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$expires_at" +%s 2>/dev/null || echo 0)
+            remaining=$((expires - now))
+
+            if [[ $remaining -gt 300 ]]; then
+              echo "Token still valid for ${remaining}s — reusing"
+              echo "reuse=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            echo "Token expires in ${remaining}s — regenerating"
+          fi
+        fi
+
+        echo "reuse=false" >> "$GITHUB_OUTPUT"
+
+    - name: Generate new token
+      id: generate-token
+      if: steps.check-token.outputs.reuse != 'true'
+      uses: actions/create-github-app-token@v3
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+
+    - name: Get GitHub App User ID
+      id: get-user-id
+      if: steps.check-token.outputs.reuse != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        APP_SLUG: ${{ steps.generate-token.outputs.app-slug }}
+      run: |
+        echo "user-id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+
+    - name: Build result
+      id: build-result
+      shell: bash
+      env:
+        REUSE: ${{ steps.check-token.outputs.reuse }}
+        CURRENT: ${{ inputs.current }}
+        NEW_TOKEN: ${{ steps.generate-token.outputs.token }}
+        NEW_APP_SLUG: ${{ steps.generate-token.outputs.app-slug }}
+        NEW_USER_ID: ${{ steps.get-user-id.outputs.user-id }}
+      run: |
+        set -euo pipefail
+
+        if [[ "$REUSE" == "true" ]]; then
+          result="$CURRENT"
+          generated="false"
+        else
+          expires_at=$(date -u -d "+59 minutes" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+59M +%Y-%m-%dT%H:%M:%SZ)
+          echo "::add-mask::${NEW_TOKEN}"
+          result=$(jq -nc \
+            --arg token "$NEW_TOKEN" \
+            --arg expires_at "$expires_at" \
+            --arg app_slug "$NEW_APP_SLUG" \
+            --arg user_id "$NEW_USER_ID" \
+            '{"token": $token, "expires-at": $expires_at, "app-slug": $app_slug, "user-id": $user_id}')
+          generated="true"
+        fi
+
+        echo "result=$result" >> "$GITHUB_OUTPUT"
+        echo "generated=$generated" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,241 @@
+# tag: local
+name: Local - Action Versioning
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  id-token: write
+  pull-requests: write
+
+env:
+  PATCH_LIST: 'fix,bugfix,perf,refactor,test,tests,chore'
+  MINOR_LIST: 'feat,feature'
+  MAJOR_LIST: '[a-zA-Z\(\)]*!,BREAKING CHANGE'
+  DEBUG: false
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  changes:
+    name: Determine Changes
+    runs-on: ubuntu-latest
+    outputs:
+      comment-body: ${{ steps.body.outputs.body }}
+      pr-body: ${{ steps.description.outputs.pr_body }}
+      pr-number: ${{ steps.description.outputs.pr_number }}
+      pr-title: ${{ steps.description.outputs.pr_title }}
+      pr-url: ${{ steps.description.outputs.pr_url }}
+      version: ${{ steps.version.outputs.new_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Determine Version
+        id: version
+        shell: bash
+        run: |
+          log() {
+            if [[ "${{ env.DEBUG }}" == "true" ]]; then
+              echo "$1"
+            fi
+          }
+
+          patch_list=$(echo '${{ env.PATCH_LIST }}' | tr ',' '|')
+          minor_list=$(echo '${{ env.MINOR_LIST }}' | tr ',' '|')
+          major_list=$(echo '${{ env.MAJOR_LIST }}' | tr ',' '|')
+          message='${{ github.event.pull_request.title || github.event.head_commit.message }}'
+
+          log "Patch List: $patch_list"
+          log "Minor List: $minor_list"
+          log "Major List: $major_list"
+
+          repo_tags=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ github.repository }}/tags --paginate |
+            jq '.[].name' | tr -d '"')
+
+          log "========= Repo Tags ========="
+          if [[ "${{ env.DEBUG }}" == "true" ]]; then
+            echo $repo_tags
+          fi
+
+          latest_tag=$(echo "$repo_tags" | grep -oE -m 1 "v[0-9]+\.[0-9]+\.[0-9]+" || echo "")
+          log "Latest tag: $latest_tag"
+
+          if [[ "$latest_tag" != "" ]]; then
+            log "Found latest tag."
+            tag=$(echo "$latest_tag" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
+            IFS='.' read -r major minor patch <<<"$tag"
+            if [[ "$message" =~ ^$major_list ]]; then
+              log "This is a major bump."
+              major=$((major + 1))
+              minor=0
+              patch=0
+            elif [[ "$message" =~ ^$minor_list ]]; then
+              log "This is a minor bump."
+              minor=$((minor + 1))
+              patch=0
+            elif [[ "$message" =~ ^$patch_list ]]; then
+              log "This is a patch bump."
+              patch=$((patch + 1))
+            else
+              log "No valid bump type found in the message."
+              exit 1
+            fi
+            new_tag="v$major.$minor.$patch"
+          else
+            log "No tag found, will create a new one."
+            new_tag="v1.0.0"
+          fi
+
+          echo "new_tag: $new_tag"
+          echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
+
+      - name: PR Information
+        id: description
+        shell: bash
+        run: |
+          pr_number=$(gh api repos/:owner/:repo/commits/${{ github.head_ref || github.sha }}/pulls --jq '.[0].number // empty')
+          echo "pr_number: $pr_number"
+          echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
+
+          pr_body=$(gh api repos/:owner/:repo/pulls/$pr_number --jq '.body')
+          echo "pr_body: $pr_body"
+          echo "pr_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$pr_body" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          pr_title=$(gh api repos/:owner/:repo/pulls/$pr_number --jq '.title')
+          echo "pr_title: $pr_title"
+          echo "pr_title=$pr_title" >> $GITHUB_OUTPUT
+
+          pr_url=$(gh api repos/:owner/:repo/pulls/$pr_number --jq '._links.html.href')
+          echo "pr_url: $pr_url"
+          echo "pr_url=$pr_url" >> $GITHUB_OUTPUT
+
+      - name: Build Comment Body
+        id: body
+        shell: bash
+        env:
+          PR_BODY: ${{ steps.description.outputs.pr_body }}
+        run: |
+          version='${{ steps.version.outputs.new_tag }}'
+          major_tag=$(echo "${version%%.*}")
+
+          BODY=$(cat << EOF
+          # New Action Version
+          ## Summary
+          ${{ steps.description.outputs.pr_title }} ([#${{ steps.description.outputs.pr_number }}](${{ steps.description.outputs.pr_url }}))
+
+          $PR_BODY
+          ## Version
+          $major_tag ($version)
+          EOF
+          )
+
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  comment:
+    name: Comment on PR
+    needs: [changes]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && needs.changes.outputs.version != ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+
+      - name: Comment On PR
+        uses: actions/github-script@v8
+        env:
+          BODY: ${{ needs.changes.outputs.comment-body }}
+          COMMENT_MARKER: "<!-- context:action-versioning/pr-comment -->"
+        with:
+          github-token: ${{ env.GH_TOKEN }}
+          script: |
+            const output = `${process.env.BODY}\n${process.env.COMMENT_MARKER}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const botComments = comments.filter(comment =>
+              comment.user.login === 'github-actions[bot]' &&
+              comment.body.includes(process.env.COMMENT_MARKER)
+            );
+            for (const botComment of botComments) {
+              try {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: botComment.id
+                });
+              } catch (deleteError) {
+                if (deleteError.status === 404) {
+                  console.log(`Comment ${botComment.id} already deleted or not found, skipping...`);
+                } else {
+                  throw deleteError;
+                }
+              }
+            }
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+  release:
+    name: Create Release and Tag
+    needs: [changes]
+    runs-on: ubuntu-latest
+    if: github.ref_name == 'main' && needs.changes.outputs.version != ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create Release
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          body: |
+            ${{ needs.changes.outputs.pr-title }} ([#${{ needs.changes.outputs.pr-number }}](${{ needs.changes.outputs.pr-url }}))
+
+            ${{ needs.changes.outputs.pr-body }}
+          commit: ${{ github.sha }}
+          draft: false
+          makeLatest: true
+          name: ${{ needs.changes.outputs.version }}
+          tag: ${{ needs.changes.outputs.version }}
+          token: ${{ env.GH_TOKEN }}
+
+      - name: Retag Major Version
+        shell: bash
+        run: |
+          version=${{ needs.changes.outputs.version }}
+          major=$(echo ${version%%.*})
+          git tag $major --force
+          git push origin $major --force
