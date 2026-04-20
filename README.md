@@ -1,2 +1,229 @@
-# create-github-app-token
-A Github Action overlay for the actions/create-github-app-token that handles token reusability.
+# Create GitHub App Token (with Reuse)
+
+A wrapper around the official [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token) that adds **token reuse**. When you pass a previously generated token back via the `current` input, this action checks whether it is still valid (more than 5 minutes remaining) and skips regeneration if so. Otherwise it delegates to `actions/create-github-app-token@v3` to mint a fresh installation token.
+
+This is useful in workflows that invoke the action multiple times across jobs or steps — rather than generating a new token each time (and counting against rate limits), you generate once and reuse until it expires.
+
+## Usage
+
+### Basic — generate a new token
+
+If you don't pass `current`, the action always generates a new token, behaving identically to `actions/create-github-app-token`.
+
+```yaml
+steps:
+  - name: Generate token
+    id: app-token
+    uses: mwerickso/create-github-app-token@v1
+    with:
+      app-id: ${{ vars.APP_ID }}
+      private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+  - name: Use token
+    env:
+      GH_TOKEN: ${{ fromJson(steps.app-token.outputs.result).token }}
+    run: gh api /repos/${{ github.repository }}
+```
+
+### Reuse an existing token across steps
+
+Generate the token once, then pass the `result` output back on subsequent calls. If the token still has more than 5 minutes of validity, the action returns it as-is without calling the GitHub API.
+
+```yaml
+steps:
+  - name: Generate token
+    id: first
+    uses: mwerickso/create-github-app-token@v1
+    with:
+      app-id: ${{ vars.APP_ID }}
+      private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+  # ... other steps that use the token ...
+
+  - name: Reuse token
+    id: second
+    uses: mwerickso/create-github-app-token@v1
+    with:
+      app-id: ${{ vars.APP_ID }}
+      private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      current: ${{ steps.first.outputs.result }}
+
+  - name: Check if token was reused
+    run: echo "Generated new token? ${{ steps.second.outputs.generated }}"
+```
+
+### Reuse a token across jobs
+
+Pass the `result` output between jobs to avoid regenerating tokens.
+
+```yaml
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      token-result: ${{ steps.app-token.outputs.result }}
+    steps:
+      - name: Generate token
+        id: app-token
+        uses: mwerickso/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+  deploy:
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reuse token
+        id: app-token
+        uses: mwerickso/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          current: ${{ needs.setup.outputs.token-result }}
+
+      - name: Use token
+        env:
+          GH_TOKEN: ${{ fromJson(steps.app-token.outputs.result).token }}
+        run: gh api /repos/${{ github.repository }}
+```
+
+### Use with `actions/checkout`
+
+```yaml
+steps:
+  - name: Generate token
+    id: app-token
+    uses: mwerickso/create-github-app-token@v1
+    with:
+      app-id: ${{ vars.APP_ID }}
+      private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+  - name: Checkout
+    uses: actions/checkout@v4
+    with:
+      token: ${{ fromJson(steps.app-token.outputs.result).token }}
+```
+
+### Configure git CLI for commits as the app bot
+
+```yaml
+steps:
+  - name: Generate token
+    id: app-token
+    uses: mwerickso/create-github-app-token@v1
+    with:
+      app-id: ${{ vars.APP_ID }}
+      private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+  - name: Checkout
+    uses: actions/checkout@v4
+    with:
+      token: ${{ fromJson(steps.app-token.outputs.result).token }}
+
+  - name: Configure git
+    env:
+      RESULT: ${{ steps.app-token.outputs.result }}
+    run: |
+      app_slug=$(echo "$RESULT" | jq -r '.["app-slug"]')
+      user_id=$(echo "$RESULT" | jq -r '.["user-id"]')
+      git config user.name "${app_slug}[bot]"
+      git config user.email "${user_id}+${app_slug}[bot]@users.noreply.github.com"
+```
+
+## Inputs
+
+| Name | Description | Required | Default |
+| --- | --- | --- | --- |
+| `app-id` | GitHub App ID. | Yes | — |
+| `private-key` | GitHub App private key (PEM format). | Yes | — |
+| `current` | JSON from a previous invocation's `result` output. When provided and the token has more than 5 minutes of validity remaining, the action reuses it instead of generating a new one. | No | `""` |
+
+> [!NOTE]
+> The `app-id` and `private-key` inputs are passed directly to [`actions/create-github-app-token@v3`](https://github.com/actions/create-github-app-token) when a new token is needed. Refer to that action's documentation for additional context on GitHub App setup and credential management.
+
+## Outputs
+
+| Name | Description |
+| --- | --- |
+| `result` | JSON object containing `token`, `expires-at`, `app-slug`, and `user-id`. Pass this value back as the `current` input on subsequent calls to enable token reuse. |
+| `generated` | `"true"` if a new token was generated, `"false"` if an existing token was reused. |
+
+### `result` schema
+
+```json
+{
+  "token": "ghs_...",
+  "expires-at": "2026-04-20T12:00:00Z",
+  "app-slug": "my-app",
+  "user-id": "123456"
+}
+```
+
+Access individual fields with the `fromJson` expression:
+
+```yaml
+${{ fromJson(steps.app-token.outputs.result).token }}
+${{ fromJson(steps.app-token.outputs.result).app-slug }}
+${{ fromJson(steps.app-token.outputs.result).user-id }}
+${{ fromJson(steps.app-token.outputs.result).expires-at }}
+```
+
+## How it works
+
+```
+┌─────────────────────────┐
+│  current input provided? │
+└────────┬────────────────┘
+         │
+    No   │   Yes
+    │    │    │
+    │    │    ▼
+    │    │  ┌──────────────────────────┐
+    │    │  │ Parse token & expires-at │
+    │    │  └────────┬─────────────────┘
+    │    │           │
+    │    │           ▼
+    │    │  ┌──────────────────────────┐
+    │    │  │ Remaining > 5 minutes?   │
+    │    │  └────┬─────────────┬───────┘
+    │    │       │ Yes         │ No
+    │    │       ▼             │
+    │    │  Return existing    │
+    │    │  token (reuse)      │
+    │    │  generated=false    │
+    │    │                     │
+    ▼    ▼                     ▼
+┌──────────────────────────────────┐
+│ actions/create-github-app-token  │
+│ @v3                              │
+│                                  │
+│ Generates new installation token │
+│ via GitHub REST API              │
+└────────────────┬─────────────────┘
+                 │
+                 ▼
+┌──────────────────────────────────┐
+│ Fetch bot user ID via            │
+│ GET /users/{app-slug}[bot]       │
+└────────────────┬─────────────────┘
+                 │
+                 ▼
+        Return JSON result
+        generated=true
+```
+
+1. **Check existing token** — If the `current` input is provided and contains a `token` and `expires-at` field, the action calculates the remaining validity. If more than **300 seconds (5 minutes)** remain, the token is returned as-is.
+
+2. **Generate new token** — Otherwise, the action delegates to [`actions/create-github-app-token@v3`](https://github.com/actions/create-github-app-token), which creates an installation access token using the [Create an installation access token for an app](https://docs.github.com/en/rest/apps/apps#create-an-installation-access-token-for-an-app) REST API endpoint.
+
+3. **Resolve bot identity** — After generating a new token, the action queries the GitHub API for the app's bot user ID (`GET /users/{app-slug}[bot]`), which is useful for configuring git commits as the app.
+
+4. **Return result** — The token, expiration timestamp, app slug, and user ID are bundled into a JSON object and returned via the `result` output.
+
+> [!IMPORTANT]
+> Installation tokens generated by `actions/create-github-app-token` expire after **1 hour**. The 5-minute threshold ensures you never receive a token that is about to expire before your step can use it.
+
+## License
+
+[MIT](LICENSE)
