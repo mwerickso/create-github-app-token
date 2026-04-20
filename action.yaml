@@ -91,6 +91,8 @@ runs:
         set -euo pipefail
 
         if [[ "$REUSE" == "true" ]]; then
+          reuse_token=$(echo "$CURRENT" | jq -r '.token')
+          echo "::add-mask::${reuse_token}"
           result="$CURRENT"
           generated="false"
         else
