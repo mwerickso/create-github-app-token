@@ -21,8 +21,7 @@ env:
   PATCH_LIST: 'fix,bugfix,perf,refactor,test,tests,chore'
   MINOR_LIST: 'feat,feature'
   MAJOR_LIST: '[a-zA-Z\(\)]*!,BREAKING CHANGE'
-  DEBUG: false
-  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   changes:
@@ -46,20 +45,14 @@ jobs:
         id: version
         shell: bash
         run: |
-          log() {
-            if [[ "${{ env.DEBUG }}" == "true" ]]; then
-              echo "$1"
-            fi
-          }
-
           patch_list=$(echo '${{ env.PATCH_LIST }}' | tr ',' '|')
           minor_list=$(echo '${{ env.MINOR_LIST }}' | tr ',' '|')
           major_list=$(echo '${{ env.MAJOR_LIST }}' | tr ',' '|')
           message='${{ github.event.pull_request.title || github.event.head_commit.message }}'
 
-          log "Patch List: $patch_list"
-          log "Minor List: $minor_list"
-          log "Major List: $major_list"
+          echo "Patch List: $patch_list"
+          echo "Minor List: $minor_list"
+          echo "Major List: $major_list"
 
           repo_tags=$(gh api \
             -H "Accept: application/vnd.github+json" \
@@ -67,37 +60,37 @@ jobs:
             /repos/${{ github.repository }}/tags --paginate |
             jq '.[].name' | tr -d '"')
 
-          log "========= Repo Tags ========="
+          echo "========= Repo Tags ========="
           if [[ "${{ env.DEBUG }}" == "true" ]]; then
             echo $repo_tags
           fi
 
           latest_tag=$(echo "$repo_tags" | grep -oE -m 1 "v[0-9]+\.[0-9]+\.[0-9]+" || echo "")
-          log "Latest tag: $latest_tag"
+          echo "Latest tag: $latest_tag"
 
           if [[ "$latest_tag" != "" ]]; then
-            log "Found latest tag."
+            echo "Found latest tag."
             tag=$(echo "$latest_tag" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
             IFS='.' read -r major minor patch <<<"$tag"
             if [[ "$message" =~ ^$major_list ]]; then
-              log "This is a major bump."
+              echo "This is a major bump."
               major=$((major + 1))
               minor=0
               patch=0
             elif [[ "$message" =~ ^$minor_list ]]; then
-              log "This is a minor bump."
+              echo "This is a minor bump."
               minor=$((minor + 1))
               patch=0
             elif [[ "$message" =~ ^$patch_list ]]; then
-              log "This is a patch bump."
+              echo "This is a patch bump."
               patch=$((patch + 1))
             else
-              log "No valid bump type found in the message."
+              echo "No valid bump type found in the message."
               exit 1
             fi
             new_tag="v$major.$minor.$patch"
           else
-            log "No tag found, will create a new one."
+            echo "No tag found, will create a new one."
             new_tag="v1.0.0"
           fi
 
@@ -111,6 +104,11 @@ jobs:
           pr_number=$(gh api repos/:owner/:repo/commits/${{ github.head_ref || github.sha }}/pulls --jq '.[0].number // empty')
           echo "pr_number: $pr_number"
           echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
+
+          if [[ -z "$pr_number" ]]; then
+            echo "No associated PR found, skipping PR details."
+            exit 0
+          fi
 
           pr_body=$(gh api repos/:owner/:repo/pulls/$pr_number --jq '.body')
           echo "pr_body: $pr_body"
@@ -167,7 +165,7 @@ jobs:
           BODY: ${{ needs.changes.outputs.comment-body }}
           COMMENT_MARKER: "<!-- context:action-versioning/pr-comment -->"
         with:
-          github-token: ${{ env.GH_TOKEN }}
+          github-token: ${{ env.GITHUB_TOKEN }}
           script: |
             const output = `${process.env.BODY}\n${process.env.COMMENT_MARKER}`;
 
@@ -178,7 +176,7 @@ jobs:
             });
 
             const botComments = comments.filter(comment =>
-              comment.user.login === 'github-actions[bot]' &&
+              comment.user.echoin === 'github-actions[bot]' &&
               comment.body.includes(process.env.COMMENT_MARKER)
             );
             for (const botComment of botComments) {
@@ -190,7 +188,7 @@ jobs:
                 });
               } catch (deleteError) {
                 if (deleteError.status === 404) {
-                  console.log(`Comment ${botComment.id} already deleted or not found, skipping...`);
+                  console.echo(`Comment ${botComment.id} already deleted or not found, skipping...`);
                 } else {
                   throw deleteError;
                 }
