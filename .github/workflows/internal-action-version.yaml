@@ -1,5 +1,4 @@
-# tag: local
-name: Local - Action Versioning
+name: Internal - Action Versioning
 
 on:
   pull_request:
@@ -138,7 +137,6 @@ jobs:
 
           BODY=$(cat << EOF
           # New Action Version
-          ## Summary
           ${{ steps.description.outputs.pr_title }} ([#${{ steps.description.outputs.pr_number }}](${{ steps.description.outputs.pr_url }}))
 
           $PR_BODY
