@@ -176,7 +176,7 @@ jobs:
             });
 
             const botComments = comments.filter(comment =>
-              comment.user.echoin === 'github-actions[bot]' &&
+              comment.user.login === 'github-actions[bot]' &&
               comment.body.includes(process.env.COMMENT_MARKER)
             );
             for (const botComment of botComments) {
@@ -226,7 +226,7 @@ jobs:
           makeLatest: true
           name: ${{ needs.changes.outputs.version }}
           tag: ${{ needs.changes.outputs.version }}
-          token: ${{ env.GH_TOKEN }}
+          token: ${{ env.GITHUB_TOKEN }}
 
       - name: Retag Major Version
         shell: bash
