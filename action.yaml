@@ -20,13 +20,25 @@ inputs:
     default: ''
 
   current:
-    description: "JSON from a previous invocation's result output. Contains token, expires-at, and app-slug. Pass to skip regeneration when still valid."
+    description: "Base64-encoded JSON from a previous invocation's result output. Pass to skip regeneration when still valid."
     default: ''
 
 outputs:
   result:
-    description: "JSON map with token, expires-at, app-slug, and user-id."
+    description: "Base64-encoded JSON map with token, expires-at, app-slug, and user-id. Pass as 'current' input to reuse."
     value: ${{ steps.build-result.outputs.result }}
+
+  token:
+    description: "The installation token (plain text, for same-job usage)."
+    value: ${{ steps.build-result.outputs.token }}
+
+  app-slug:
+    description: "The GitHub App slug."
+    value: ${{ steps.build-result.outputs.app-slug }}
+
+  user-id:
+    description: "The GitHub App bot user ID."
+    value: ${{ steps.build-result.outputs.user-id }}
 
   generated:
     description: "Whether a new token was generated ('true') or an existing one was reused ('false')."
@@ -48,22 +60,26 @@ runs:
         set -euo pipefail
 
         if [[ -n "$CURRENT" ]]; then
-          token=$(echo "$CURRENT" | jq -r '.token // empty')
-          expires_at=$(echo "$CURRENT" | jq -r '.["expires-at"] // empty')
+          decoded=$(echo "$CURRENT" | base64 -d 2>/dev/null || echo "")
 
-          if [[ -n "$token" && -n "$expires_at" ]]; then
-            now=$(date -u +%s)
-            expires=$(date -u -d "$expires_at" +%s 2>/dev/null || date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$expires_at" +%s 2>/dev/null || echo 0)
-            remaining=$((expires - now))
+          if [[ -n "$decoded" ]]; then
+            token=$(echo "$decoded" | jq -r '.token // empty')
+            expires_at=$(echo "$decoded" | jq -r '.["expires-at"] // empty')
 
-            if [[ $remaining -gt 300 ]]; then
-              echo "Token still valid for ${remaining}s — reusing"
-              echo "::add-mask::${token}"
-              echo "reuse=true" >> "$GITHUB_OUTPUT"
-              exit 0
+            if [[ -n "$token" && -n "$expires_at" ]]; then
+              now=$(date -u +%s)
+              expires=$(date -u -d "$expires_at" +%s 2>/dev/null || date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$expires_at" +%s 2>/dev/null || echo 0)
+              remaining=$((expires - now))
+
+              if [[ $remaining -gt 300 ]]; then
+                echo "Token still valid for ${remaining}s — reusing"
+                echo "::add-mask::${token}"
+                echo "reuse=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+
+              echo "Token expires in ${remaining}s — regenerating"
             fi
-
-            echo "Token expires in ${remaining}s — regenerating"
           fi
         fi
 
@@ -103,21 +119,32 @@ runs:
         set -euo pipefail
 
         if [[ "$REUSE" == "true" ]]; then
-          result="$CURRENT"
+          json=$(echo "$CURRENT" | base64 -d)
+          token=$(echo "$json" | jq -r '.token')
+          app_slug=$(echo "$json" | jq -r '.["app-slug"]')
+          user_id=$(echo "$json" | jq -r '.["user-id"]')
           generated="false"
-          expires_at=$(echo "$CURRENT" | jq -r '.["expires-at"]')
+          result="$CURRENT"
+          expires_at=$(echo "$json" | jq -r '.["expires-at"]')
           echo "Reusing existing token (expires $(date -u -d "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || echo "$expires_at"))"
         else
+          token="$NEW_TOKEN"
+          app_slug="$NEW_APP_SLUG"
+          user_id="$NEW_USER_ID"
           expires_at=$(date -u -d "+59 minutes" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+59M +%Y-%m-%dT%H:%M:%SZ)
-          result=$(jq -nc \
-            --arg token "$NEW_TOKEN" \
+          json=$(jq -nc \
+            --arg token "$token" \
             --arg expires_at "$expires_at" \
-            --arg app_slug "$NEW_APP_SLUG" \
-            --arg user_id "$NEW_USER_ID" \
+            --arg app_slug "$app_slug" \
+            --arg user_id "$user_id" \
             '{"token": $token, "expires-at": $expires_at, "app-slug": $app_slug, "user-id": $user_id}')
           generated="true"
+          result=$(echo "$json" | base64 | tr -d '\n')
           echo "Generated new token (expires $(date -u -d "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || echo "$expires_at"))"
         fi
 
         echo "result=$result" >> "$GITHUB_OUTPUT"
+        echo "token=$token" >> "$GITHUB_OUTPUT"
+        echo "app-slug=$app_slug" >> "$GITHUB_OUTPUT"
+        echo "user-id=$user_id" >> "$GITHUB_OUTPUT"
         echo "generated=$generated" >> "$GITHUB_OUTPUT"
