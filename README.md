@@ -16,7 +16,7 @@ steps:
     id: app-token
     uses: mwerickso/create-github-app-token@v1
     with:
-      app-id: ${{ vars.APP_ID }}
+      client-id: ${{ vars.APP_CLIENT_ID }}
       private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
   - name: Use token
@@ -35,7 +35,7 @@ steps:
     id: first
     uses: mwerickso/create-github-app-token@v1
     with:
-      app-id: ${{ vars.APP_ID }}
+      client-id: ${{ vars.APP_CLIENT_ID }}
       private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
   # ... other steps that use the token ...
@@ -44,7 +44,7 @@ steps:
     id: second
     uses: mwerickso/create-github-app-token@v1
     with:
-      app-id: ${{ vars.APP_ID }}
+      client-id: ${{ vars.APP_CLIENT_ID }}
       private-key: ${{ secrets.APP_PRIVATE_KEY }}
       current: ${{ steps.first.outputs.result }}
 
@@ -67,7 +67,7 @@ jobs:
         id: app-token
         uses: mwerickso/create-github-app-token@v1
         with:
-          app-id: ${{ vars.APP_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
   deploy:
@@ -78,7 +78,7 @@ jobs:
         id: app-token
         uses: mwerickso/create-github-app-token@v1
         with:
-          app-id: ${{ vars.APP_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           current: ${{ needs.setup.outputs.token-result }}
 
@@ -96,7 +96,7 @@ steps:
     id: app-token
     uses: mwerickso/create-github-app-token@v1
     with:
-      app-id: ${{ vars.APP_ID }}
+      client-id: ${{ vars.APP_CLIENT_ID }}
       private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
   - name: Checkout
@@ -113,7 +113,7 @@ steps:
     id: app-token
     uses: mwerickso/create-github-app-token@v1
     with:
-      app-id: ${{ vars.APP_ID }}
+      client-id: ${{ vars.APP_CLIENT_ID }}
       private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
   - name: Checkout
@@ -135,12 +135,14 @@ steps:
 
 | Name | Description | Required | Default |
 | --- | --- | --- | --- |
-| `app-id` | GitHub App ID. | Yes | — |
+| `client-id` | GitHub App client ID. | Yes | — |
 | `private-key` | GitHub App private key (PEM format). | Yes | — |
+| `owner` | The owner of the GitHub App installation. | No | Current repository owner |
+| `repositories` | Comma-separated list of repositories to grant access to. | No | Current repository only |
 | `current` | JSON from a previous invocation's `result` output. When provided and the token has more than 5 minutes of validity remaining, the action reuses it instead of generating a new one. | No | `""` |
 
 > [!NOTE]
-> The `app-id` and `private-key` inputs are passed directly to [`actions/create-github-app-token@v3`](https://github.com/actions/create-github-app-token) when a new token is needed. Refer to that action's documentation for additional context on GitHub App setup and credential management.
+> The `client-id`, `private-key`, `owner`, and `repositories` inputs are passed directly to [`actions/create-github-app-token@v3`](https://github.com/actions/create-github-app-token) when a new token is needed. Refer to that action's documentation for additional context on GitHub App setup and credential management.
 
 ## Outputs
 

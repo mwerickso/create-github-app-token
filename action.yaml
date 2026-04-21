@@ -3,8 +3,8 @@ description: "Generate or refresh a GitHub App installation token. Reuses an exi
 author: "mwerickso"
 
 inputs:
-  app-id:
-    description: "GitHub App ID."
+  client-id:
+    description: "GitHub App client ID."
     required: true
 
   private-key:
@@ -73,10 +73,11 @@ runs:
       if: steps.check-token.outputs.reuse != 'true'
       uses: actions/create-github-app-token@v3
       with:
-        app-id: ${{ inputs.app-id }}
+        client-id: ${{ inputs.client-id }}
         private-key: ${{ inputs.private-key }}
         owner: ${{ inputs.owner }}
         repositories: ${{ inputs.repositories }}
+        skip-token-revoke: true
 
     - name: Get GitHub App User ID
       id: get-user-id
@@ -105,6 +106,8 @@ runs:
           echo "::add-mask::${reuse_token}"
           result="$CURRENT"
           generated="false"
+          expires_at=$(echo "$CURRENT" | jq -r '.["expires-at"]')
+          echo "::notice::Reusing existing token (expires $(date -u -d "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || echo "$expires_at"))"
         else
           expires_at=$(date -u -d "+59 minutes" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+59M +%Y-%m-%dT%H:%M:%SZ)
           echo "::add-mask::${NEW_TOKEN}"
@@ -115,6 +118,7 @@ runs:
             --arg user_id "$NEW_USER_ID" \
             '{"token": $token, "expires-at": $expires_at, "app-slug": $app_slug, "user-id": $user_id}')
           generated="true"
+          echo "::notice::Generated new token (expires $(date -u -d "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || echo "$expires_at"))"
         fi
 
         echo "result=$result" >> "$GITHUB_OUTPUT"
