@@ -58,6 +58,7 @@ runs:
 
             if [[ $remaining -gt 300 ]]; then
               echo "Token still valid for ${remaining}s — reusing"
+              echo "::add-mask::${token}"
               echo "reuse=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -102,15 +103,12 @@ runs:
         set -euo pipefail
 
         if [[ "$REUSE" == "true" ]]; then
-          reuse_token=$(echo "$CURRENT" | jq -r '.token')
-          echo "::add-mask::${reuse_token}"
           result="$CURRENT"
           generated="false"
           expires_at=$(echo "$CURRENT" | jq -r '.["expires-at"]')
-          echo "::notice::Reusing existing token (expires $(date -u -d "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || echo "$expires_at"))"
+          echo "Reusing existing token (expires $(date -u -d "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || echo "$expires_at"))"
         else
           expires_at=$(date -u -d "+59 minutes" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+59M +%Y-%m-%dT%H:%M:%SZ)
-          echo "::add-mask::${NEW_TOKEN}"
           result=$(jq -nc \
             --arg token "$NEW_TOKEN" \
             --arg expires_at "$expires_at" \
@@ -118,7 +116,7 @@ runs:
             --arg user_id "$NEW_USER_ID" \
             '{"token": $token, "expires-at": $expires_at, "app-slug": $app_slug, "user-id": $user_id}')
           generated="true"
-          echo "::notice::Generated new token (expires $(date -u -d "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || echo "$expires_at"))"
+          echo "Generated new token (expires $(date -u -d "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || date -u -jf '%Y-%m-%dT%H:%M:%SZ' "$expires_at" '+%B %d, %Y %I:%M %p UTC' 2>/dev/null || echo "$expires_at"))"
         fi
 
         echo "result=$result" >> "$GITHUB_OUTPUT"
