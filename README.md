@@ -21,7 +21,7 @@ steps:
 
   - name: Use token
     env:
-      GH_TOKEN: ${{ fromJson(steps.app-token.outputs.result).token }}
+      GH_TOKEN: ${{ steps.app-token.outputs.token }}
     run: gh api /repos/${{ github.repository }}
 ```
 
@@ -84,7 +84,7 @@ jobs:
 
       - name: Use token
         env:
-          GH_TOKEN: ${{ fromJson(steps.app-token.outputs.result).token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh api /repos/${{ github.repository }}
 ```
 
@@ -102,7 +102,7 @@ steps:
   - name: Checkout
     uses: actions/checkout@v4
     with:
-      token: ${{ fromJson(steps.app-token.outputs.result).token }}
+      token: ${{ steps.app-token.outputs.token }}
 ```
 
 ### Configure git CLI for commits as the app bot
@@ -119,16 +119,15 @@ steps:
   - name: Checkout
     uses: actions/checkout@v4
     with:
-      token: ${{ fromJson(steps.app-token.outputs.result).token }}
+      token: ${{ steps.app-token.outputs.token }}
 
   - name: Configure git
     env:
-      RESULT: ${{ steps.app-token.outputs.result }}
+      APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+      USER_ID: ${{ steps.app-token.outputs.user-id }}
     run: |
-      app_slug=$(echo "$RESULT" | jq -r '.["app-slug"]')
-      user_id=$(echo "$RESULT" | jq -r '.["user-id"]')
-      git config user.name "${app_slug}[bot]"
-      git config user.email "${user_id}+${app_slug}[bot]@users.noreply.github.com"
+      git config user.name "${APP_SLUG}[bot]"
+      git config user.email "${USER_ID}+${APP_SLUG}[bot]@users.noreply.github.com"
 ```
 
 ## Inputs
@@ -139,7 +138,7 @@ steps:
 | `private-key` | GitHub App private key (PEM format). | Yes | — |
 | `owner` | The owner of the GitHub App installation. | No | Current repository owner |
 | `repositories` | Comma-separated list of repositories to grant access to. | No | Current repository only |
-| `current` | JSON from a previous invocation's `result` output. When provided and the token has more than 5 minutes of validity remaining, the action reuses it instead of generating a new one. | No | `""` |
+| `current` | Base64-encoded JSON from a previous invocation's `result` output. When provided and the token has more than 5 minutes of validity remaining, the action reuses it instead of generating a new one. | No | `""` |
 
 > [!NOTE]
 > The `client-id`, `private-key`, `owner`, and `repositories` inputs are passed directly to [`actions/create-github-app-token@v3`](https://github.com/actions/create-github-app-token) when a new token is needed. Refer to that action's documentation for additional context on GitHub App setup and credential management.
@@ -148,34 +147,27 @@ steps:
 
 | Name | Description |
 | --- | --- |
-| `result` | JSON object containing `token`, `expires-at`, `app-slug`, and `user-id`. Pass this value back as the `current` input on subsequent calls to enable token reuse. |
+| `token` | The installation token (plain text). |
+| `app-slug` | The GitHub App slug. |
+| `user-id` | The GitHub App bot user ID. |
+| `result` | Base64-encoded JSON containing `token`, `expires-at`, `app-slug`, and `user-id`. Pass this value back as the `current` input on subsequent calls to enable token reuse. |
 | `generated` | `"true"` if a new token was generated, `"false"` if an existing token was reused. |
 
-### `result` schema
-
-```json
-{
-  "token": "ghs_...",
-  "expires-at": "2026-04-20T12:00:00Z",
-  "app-slug": "my-app",
-  "user-id": "123456"
-}
-```
-
-Access individual fields with the `fromJson` expression:
+For most use cases, reference the direct outputs:
 
 ```yaml
-${{ fromJson(steps.app-token.outputs.result).token }}
-${{ fromJson(steps.app-token.outputs.result).app-slug }}
-${{ fromJson(steps.app-token.outputs.result).user-id }}
-${{ fromJson(steps.app-token.outputs.result).expires-at }}
+${{ steps.app-token.outputs.token }}
+${{ steps.app-token.outputs.app-slug }}
+${{ steps.app-token.outputs.user-id }}
 ```
+
+The `result` output is only needed when passing tokens between steps or jobs via the `current` input.
 
 ## How it works
 
 ```
 ┌─────────────────────────┐
-│  current input provided? │
+│ current input provided? │
 └────────┬────────────────┘
          │
     No   │   Yes
